@@ -2,27 +2,53 @@
  * CRM Analytics Recipe Extractor
  * Adapted from AndrewMillerOnline/dataflow-extractor
  *
- * Supports CRM Analytics Data Recipe JSON (action-based nodes:
- * load / save / formula / join / filter / schema / aggregate /
- * computeRelative / extractGrains / typeCast / drop_fields etc.)
+ * Node counting uses UI-level (canvas) nodes as "total nodes":
+ *   - LOAD_DATASET  → displayed as "Input"
+ *   - OUTPUT        → displayed as "Output"
+ *   - JOIN          → displayed as "Join"
+ *   - TRANSFORM     → displayed as "Transform"
+ *   - FILTER        → displayed as "Filter"
+ *   - AGGREGATE     → displayed as "Aggregate"
  *
- * Key structural decisions:
- *  - TRANSFORM ui nodes: graph values are objects {label, parameters}
- *  - AGGREGATE ui nodes: graph values are null (keys only)
- *  - Connectors reference TOP-LEVEL ui node names only
- *  - recipeToUi map bridges recipe node names → ui node names for connector filtering
+ * Child nodes inside TRANSFORM/AGGREGATE graphs (formula, schema, flatten, etc.)
+ * are shown separately as a secondary breakdown.
  */
 
-// ─── COMPOUND UI TYPES (wrap child recipe nodes inside graph) ─────────────────
-const COMPOUND_UI_TYPES = new Set(['TRANSFORM', 'AGGREGATE']);
+// ─── COMPOUND UI TYPES ────────────────────────────────────────────────────────
+var COMPOUND_UI_TYPES = new Set(['TRANSFORM', 'AGGREGATE']);
+
+// ─── FRIENDLY LABELS ─────────────────────────────────────────────────────────
+var UI_TYPE_LABEL = {
+  'LOAD_DATASET': 'Input',
+  'OUTPUT':       'Output',
+  'JOIN':         'Join',
+  'TRANSFORM':    'Transform',
+  'FILTER':       'Filter',
+  'AGGREGATE':    'Aggregate',
+};
+var UI_TYPE_BADGE = {
+  'LOAD_DATASET': 'bg-success',
+  'OUTPUT':       'bg-warning text-dark',
+  'JOIN':         'bg-primary',
+  'TRANSFORM':    'bg-info text-dark',
+  'FILTER':       'bg-danger',
+  'AGGREGATE':    'bg-secondary',
+};
+
+function uiTypeLabel(type) {
+  return UI_TYPE_LABEL[type] || type;
+}
+function uiTypeBadge(type) {
+  return UI_TYPE_BADGE[type] || 'bg-secondary';
+}
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
-let recipeJson      = null;
-let labelMap        = {};
-let recipeToUi      = {};
-let outputNodes     = [];
-let selectedOutputs = new Set();
-let extractedJson   = null;
+var recipeJson      = null;
+var labelMap        = {};
+var recipeToUi      = {};
+var outputNodes     = [];
+var selectedOutputs = new Set();
+var extractedJson   = null;
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 function init() {
@@ -31,12 +57,12 @@ function init() {
 
 // ─── FILE HANDLING ────────────────────────────────────────────────────────────
 function handleFileChange(e) {
-  const file = e.target.files[0];
+  var file = e.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (ev) => {
+  var reader = new FileReader();
+  reader.onload = function(ev) {
     try {
-      const json = JSON.parse(ev.target.result);
+      var json = JSON.parse(ev.target.result);
       loadRecipe(json, file.name);
     } catch (err) {
       showError('JSON parse error: ' + err.message);
@@ -46,29 +72,27 @@ function handleFileChange(e) {
 }
 
 function loadRecipe(json, filename) {
-  // Validate
   if (!json.nodes) {
     showError("No 'nodes' key found — is this a CRM Analytics Data Recipe JSON?");
     return;
   }
 
-  // Reset state
   recipeJson      = json;
   extractedJson   = null;
   selectedOutputs = new Set();
   outputNodes     = [];
 
-  // Build maps
-  const maps = buildMaps(json);
+  var maps   = buildMaps(json);
   labelMap   = maps.lmap;
   recipeToUi = maps.r2ui;
 
   // Collect output (save) nodes
-  for (const [name, node] of Object.entries(json.nodes)) {
+  for (var name in json.nodes) {
+    var node = json.nodes[name];
     if (node.action === 'save') {
-      const ds = (node.parameters && node.parameters.dataset) ? node.parameters.dataset : {};
+      var ds = (node.parameters && node.parameters.dataset) ? node.parameters.dataset : {};
       outputNodes.push({
-        name,
+        name:        name,
         label:       (labelMap[name] && labelMap[name].label) ? labelMap[name].label : (ds.label || name),
         datasetName: ds.name       || '',
         folder:      ds.folderName || '',
@@ -76,34 +100,32 @@ function loadRecipe(json, filename) {
     }
   }
 
-  // Show original JSON
   document.getElementById('fileContent').textContent = JSON.stringify(json, null, 2);
-
-  // Reset result area
   document.getElementById('downloadButton').classList.add('invisible');
   document.getElementById('copyButton').classList.add('invisible');
   document.getElementById('resultJSON').textContent = '';
 
-  // Render
   renderStats(json);
   renderNodePicker();
 
-  const nodeCount = Object.keys(json.nodes).length;
+  var uiCount = Object.keys((json.ui && json.ui.nodes) ? json.ui.nodes : {}).length;
   document.getElementById('results').innerHTML =
-    `<div class="alert alert-success py-2">
-       ✔ Loaded <strong>${escHtml(filename)}</strong> &mdash; version ${json.version || '?'},
-       <strong>${nodeCount}</strong> recipe nodes,
-       <strong>${outputNodes.length}</strong> output dataset(s).
-     </div>`;
+    '<div class="alert alert-success py-2">' +
+      '&#10004; Loaded <strong>' + escHtml(filename) + '</strong> &mdash; ' +
+      'version ' + (json.version || '?') + ', ' +
+      '<strong>' + uiCount + '</strong> nodes, ' +
+      '<strong>' + outputNodes.length + '</strong> output dataset(s).' +
+    '</div>';
 }
 
 // ─── MAP BUILDING ─────────────────────────────────────────────────────────────
 function buildMaps(json) {
-  const lmap = {}, r2ui = {};
-  const uiNodes     = (json.ui && json.ui.nodes) ? json.ui.nodes : {};
-  const recipeNodes = json.nodes || {};
+  var lmap = {}, r2ui = {};
+  var uiNodes     = (json.ui && json.ui.nodes) ? json.ui.nodes : {};
+  var recipeNodes = json.nodes || {};
 
-  for (const [uiName, unode] of Object.entries(uiNodes)) {
+  for (var uiName in uiNodes) {
+    var unode = uiNodes[uiName];
     if (!unode) continue;
 
     lmap[uiName] = {
@@ -113,12 +135,11 @@ function buildMaps(json) {
       parentLabel: null,
     };
 
-    // Direct recipe ↔ ui name match
     if (uiName in recipeNodes) r2ui[uiName] = uiName;
 
-    // Graph children (TRANSFORM has object values; AGGREGATE has null values)
-    const graph = unode.graph || {};
-    for (const [gname, gval] of Object.entries(graph)) {
+    var graph = unode.graph || {};
+    for (var gname in graph) {
+      var gval = graph[gname];
       lmap[gname] = {
         label:       (gval && gval.label) ? gval.label : gname,
         type:        (gval && gval.parameters && gval.parameters.type) ? gval.parameters.type : '',
@@ -129,7 +150,7 @@ function buildMaps(json) {
     }
   }
 
-  return { lmap, r2ui };
+  return { lmap: lmap, r2ui: r2ui };
 }
 
 // ─── ANCESTOR TRAVERSAL ───────────────────────────────────────────────────────
@@ -137,10 +158,10 @@ function getAncestors(nodeName, nodes, visited) {
   if (!visited) visited = new Set();
   if (visited.has(nodeName)) return visited;
   visited.add(nodeName);
-  const node = nodes[nodeName];
+  var node = nodes[nodeName];
   if (!node) return visited;
-  const sources = node.sources || [];
-  for (let i = 0; i < sources.length; i++) {
+  var sources = node.sources || [];
+  for (var i = 0; i < sources.length; i++) {
     getAncestors(sources[i], nodes, visited);
   }
   return visited;
@@ -148,45 +169,38 @@ function getAncestors(nodeName, nodes, visited) {
 
 // ─── EXTRACTION ───────────────────────────────────────────────────────────────
 function extractSubRecipe(selectedArr) {
-  const nodes         = recipeJson.nodes || {};
-  const ui            = recipeJson.ui    || {};
-  const uiNodes       = ui.nodes         || {};
-  const allConnectors = ui.connectors    || [];
+  var nodes         = recipeJson.nodes || {};
+  var ui            = recipeJson.ui    || {};
+  var uiNodes       = ui.nodes         || {};
+  var allConnectors = ui.connectors    || [];
 
-  // 1. Walk sources to collect all needed recipe nodes
-  const neededRecipe = new Set();
-  for (let i = 0; i < selectedArr.length; i++) {
+  var neededRecipe = new Set();
+  for (var i = 0; i < selectedArr.length; i++) {
     getAncestors(selectedArr[i], nodes, neededRecipe);
   }
 
-  // 2. Map each needed recipe node → its parent ui node
-  const neededUi = new Set();
+  var neededUi = new Set();
   neededRecipe.forEach(function(rn) {
-    const uiName = recipeToUi[rn];
+    var uiName = recipeToUi[rn];
     if (uiName) neededUi.add(uiName);
   });
 
-  // 3. Build new recipe.nodes
-  const newNodes = {};
+  var newNodes = {};
   neededRecipe.forEach(function(n) {
     if (nodes[n]) newNodes[n] = nodes[n];
   });
 
-  // 4. Build new ui.nodes
-  //    Compound types: filter graph to needed children only
-  //    Simple types: include as-is
-  const newUiNodes = {};
+  var newUiNodes = {};
   neededUi.forEach(function(uiName) {
-    const unode = uiNodes[uiName];
+    var unode = uiNodes[uiName];
     if (!unode) return;
 
     if (COMPOUND_UI_TYPES.has(unode.type) && unode.graph) {
-      const filteredGraph = {};
-      for (const [gname, gval] of Object.entries(unode.graph)) {
-        if (neededRecipe.has(gname)) filteredGraph[gname] = gval;
+      var filteredGraph = {};
+      for (var gname in unode.graph) {
+        if (neededRecipe.has(gname)) filteredGraph[gname] = unode.graph[gname];
       }
-      const newUnode = Object.assign({}, unode, { graph: filteredGraph });
-      // AGGREGATE nodes also carry internal connectors
+      var newUnode = Object.assign({}, unode, { graph: filteredGraph });
       if (Array.isArray(unode.connectors)) {
         newUnode.connectors = unode.connectors.filter(function(c) {
           return neededRecipe.has(c.source) && neededRecipe.has(c.target);
@@ -198,12 +212,11 @@ function extractSubRecipe(selectedArr) {
     }
   });
 
-  // 5. Filter top-level connectors (both endpoints must be in neededUi)
-  const newConnectors = allConnectors.filter(function(c) {
+  var newConnectors = allConnectors.filter(function(c) {
     return neededUi.has(c.source) && neededUi.has(c.target);
   });
 
-  const newUi = { nodes: newUiNodes, connectors: newConnectors };
+  var newUi = { nodes: newUiNodes, connectors: newConnectors };
   if (ui.hiddenColumns) newUi.hiddenColumns = ui.hiddenColumns;
 
   return {
@@ -218,25 +231,64 @@ function extractSubRecipe(selectedArr) {
   };
 }
 
+// ─── HELPER: count child recipe node actions inside TRANSFORM/AGGREGATE graphs ─
+function countChildActions(json) {
+  var uiNodes     = (json.ui && json.ui.nodes) ? json.ui.nodes : {};
+  var recipeNodes = json.nodes || {};
+  var counts = {};
+  for (var uiName in uiNodes) {
+    var unode = uiNodes[uiName];
+    if (!unode || !unode.graph) continue;
+    for (var gname in unode.graph) {
+      var rn = recipeNodes[gname];
+      if (!rn) continue;
+      var a = rn.action || 'unknown';
+      counts[a] = (counts[a] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
 // ─── RENDER: STATS ────────────────────────────────────────────────────────────
 function renderStats(json) {
-  const counts = {};
-  for (const node of Object.values(json.nodes || {})) {
-    const a = node.action || 'unknown';
-    counts[a] = (counts[a] || 0) + 1;
+  var uiNodes  = (json.ui && json.ui.nodes) ? json.ui.nodes : {};
+  var uiCounts = {};
+  var totalUi  = 0;
+
+  for (var name in uiNodes) {
+    var unode = uiNodes[name];
+    if (!unode) continue;
+    var t = unode.type || 'unknown';
+    uiCounts[t] = (uiCounts[t] || 0) + 1;
+    totalUi++;
   }
-  const pills = Object.entries(counts)
+
+  var childCounts = countChildActions(json);
+
+  var parentPills = Object.entries(uiCounts)
     .sort(function(a, b) { return b[1] - a[1]; })
-    .map(function(e) { return '<span class="badge bg-secondary me-1">' + escHtml(e[0]) + ': ' + e[1] + '</span>'; })
-    .join('');
+    .map(function(e) {
+      return '<span class="badge ' + uiTypeBadge(e[0]) + ' me-1">' +
+             escHtml(uiTypeLabel(e[0])) + ': ' + e[1] + '</span>';
+    }).join('');
+
+  var childPills = Object.entries(childCounts)
+    .sort(function(a, b) { return b[1] - a[1]; })
+    .map(function(e) {
+      return '<span class="badge bg-light text-dark border me-1">' +
+             escHtml(e[0]) + ': ' + e[1] + '</span>';
+    }).join('');
 
   document.getElementById('statsRow').innerHTML =
-    '<div class="mb-3"><strong>Node types:</strong> ' + pills + '</div>';
+    '<div class="mb-1"><strong>Nodes (' + totalUi + '):</strong> ' + parentPills + '</div>' +
+    (childPills
+      ? '<div class="mb-3 small text-muted">Inside Transform blocks &mdash; ' + childPills + '</div>'
+      : '<div class="mb-3"></div>');
 }
 
 // ─── RENDER: NODE PICKER ──────────────────────────────────────────────────────
 function renderNodePicker() {
-  const picker = document.getElementById('nodePicker');
+  var picker = document.getElementById('nodePicker');
   if (!picker) return;
 
   if (outputNodes.length === 0) {
@@ -244,19 +296,32 @@ function renderNodePicker() {
     return;
   }
 
-  const totalNodes = Object.keys(recipeJson.nodes || {}).length;
-  let html = '<h5 class="mt-2 mb-3">Select output dataset(s) to extract:</h5>';
+  var allUiNodes  = (recipeJson.ui && recipeJson.ui.nodes) ? recipeJson.ui.nodes : {};
+  var totalUiCount = Object.keys(allUiNodes).length;
+
+  var html = '<h5 class="mt-2 mb-3">Select output dataset(s) to extract:</h5>';
   html += '<div class="row g-3">';
 
-  for (const o of outputNodes) {
-    const deps    = getAncestors(o.name, recipeJson.nodes);
-    const depCount = deps.size;
-    const uiCount  = (function() {
-      const s = new Set();
-      deps.forEach(function(n) { const u = recipeToUi[n]; if (u) s.add(u); });
-      return s.size;
-    })();
-    const pct = Math.round(depCount / totalNodes * 100);
+  for (var i = 0; i < outputNodes.length; i++) {
+    var o       = outputNodes[i];
+    var deps    = getAncestors(o.name, recipeJson.nodes);
+    var uiSet   = new Set();
+    deps.forEach(function(n) { var u = recipeToUi[n]; if (u) uiSet.add(u); });
+    var uiCount = uiSet.size;
+    var pct     = totalUiCount > 0 ? Math.round(uiCount / totalUiCount * 100) : 0;
+
+    // Build per-type breakdown for the card footer
+    var typeCounts = {};
+    uiSet.forEach(function(uname) {
+      var unode = allUiNodes[uname];
+      if (!unode) return;
+      var lbl = uiTypeLabel(unode.type || 'unknown');
+      typeCounts[lbl] = (typeCounts[lbl] || 0) + 1;
+    });
+    var typeStr = Object.entries(typeCounts)
+      .sort(function(a, b) { return b[1] - a[1]; })
+      .map(function(e) { return e[0] + ': ' + e[1]; })
+      .join(' &middot; ');
 
     html +=
       '<div class="col-md-6 col-lg-4">' +
@@ -273,7 +338,9 @@ function renderNodePicker() {
                      'onclick="event.stopPropagation()" ' +
                      'onchange="toggleNode(\'' + o.name + '\')">' +
             '</div>' +
-            '<div class="mt-2 text-muted small">' + depCount + ' nodes (' + pct + '%) &middot; ' + uiCount + ' visual blocks</div>' +
+            '<div class="mt-2 text-muted small">' +
+              uiCount + ' nodes (' + pct + '%) &mdash; ' + typeStr +
+            '</div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -297,35 +364,37 @@ function toggleNode(name) {
   } else {
     selectedOutputs.add(name);
   }
-  const card = document.getElementById('card_' + name);
-  const chk  = document.getElementById('chk_' + name);
-  if (card) { card.classList.toggle('selected', selectedOutputs.has(name)); }
-  if (chk)  { chk.checked = selectedOutputs.has(name); }
-  const btn = document.getElementById('extractBtn');
+  var card = document.getElementById('card_' + name);
+  var chk  = document.getElementById('chk_' + name);
+  if (card) card.classList.toggle('selected', selectedOutputs.has(name));
+  if (chk)  chk.checked = selectedOutputs.has(name);
+  var btn = document.getElementById('extractBtn');
   if (btn) btn.disabled = selectedOutputs.size === 0;
 }
 
 function selectAll() {
-  for (const o of outputNodes) {
-    selectedOutputs.add(o.name);
-    const card = document.getElementById('card_' + o.name);
-    const chk  = document.getElementById('chk_' + o.name);
+  for (var i = 0; i < outputNodes.length; i++) {
+    var name = outputNodes[i].name;
+    selectedOutputs.add(name);
+    var card = document.getElementById('card_' + name);
+    var chk  = document.getElementById('chk_' + name);
     if (card) card.classList.add('selected');
     if (chk)  chk.checked = true;
   }
-  const btn = document.getElementById('extractBtn');
+  var btn = document.getElementById('extractBtn');
   if (btn) btn.disabled = false;
 }
 
 function clearAll() {
-  for (const o of outputNodes) {
-    selectedOutputs.delete(o.name);
-    const card = document.getElementById('card_' + o.name);
-    const chk  = document.getElementById('chk_' + o.name);
+  for (var i = 0; i < outputNodes.length; i++) {
+    var name = outputNodes[i].name;
+    selectedOutputs.delete(name);
+    var card = document.getElementById('card_' + name);
+    var chk  = document.getElementById('chk_' + name);
     if (card) card.classList.remove('selected');
     if (chk)  chk.checked = false;
   }
-  const btn = document.getElementById('extractBtn');
+  var btn = document.getElementById('extractBtn');
   if (btn) btn.disabled = true;
 }
 
@@ -334,45 +403,58 @@ function runExtraction() {
   if (!recipeJson || selectedOutputs.size === 0) return;
 
   extractedJson = extractSubRecipe(Array.from(selectedOutputs));
-  const meta  = extractedJson._meta;
-  const total = Object.keys(recipeJson.nodes || {}).length;
-  const pct   = Math.round((1 - meta.recipeNodes / total) * 100);
+  var meta         = extractedJson._meta;
+  var totalUiCount = Object.keys((recipeJson.ui && recipeJson.ui.nodes) ? recipeJson.ui.nodes : {}).length;
+  var pct          = totalUiCount > 0 ? Math.round((1 - meta.uiNodes / totalUiCount) * 100) : 0;
 
-  // Action count badges for result
-  const counts = {};
-  for (const node of Object.values(extractedJson.nodes || {})) {
-    const a = node.action || 'unknown';
-    counts[a] = (counts[a] || 0) + 1;
+  // Count ui node types in the extracted result
+  var extractedUiNodes = (extractedJson.ui && extractedJson.ui.nodes) ? extractedJson.ui.nodes : {};
+  var uiCounts = {};
+  for (var uname in extractedUiNodes) {
+    var unode = extractedUiNodes[uname];
+    if (!unode) continue;
+    var t = uiTypeLabel(unode.type || 'unknown');
+    uiCounts[t] = (uiCounts[t] || 0) + 1;
   }
-  const pills = Object.entries(counts)
+  var pills = Object.entries(uiCounts)
     .sort(function(a, b) { return b[1] - a[1]; })
-    .map(function(e) { return '<span class="badge bg-success me-1">' + escHtml(e[0]) + ': ' + e[1] + '</span>'; })
-    .join('');
+    .map(function(e) {
+      var rawType = Object.keys(UI_TYPE_LABEL).find(function(k) { return UI_TYPE_LABEL[k] === e[0]; }) || '';
+      return '<span class="badge ' + uiTypeBadge(rawType) + ' me-1">' + escHtml(e[0]) + ': ' + e[1] + '</span>';
+    }).join('');
 
-  const selLabels = Array.from(selectedOutputs)
-    .map(function(n) { const o = outputNodes.find(function(x) { return x.name === n; }); return o ? o.label : n; })
-    .join(', ');
+  // Child breakdown for extracted result
+  var childCounts = countChildActions(extractedJson);
+  var childPills = Object.entries(childCounts)
+    .sort(function(a, b) { return b[1] - a[1]; })
+    .map(function(e) {
+      return '<span class="badge bg-light text-dark border me-1">' + escHtml(e[0]) + ': ' + e[1] + '</span>';
+    }).join('');
+
+  var selLabels = Array.from(selectedOutputs)
+    .map(function(n) {
+      var o = outputNodes.find(function(x) { return x.name === n; });
+      return o ? o.label : n;
+    }).join(', ');
 
   document.getElementById('results').innerHTML =
     '<div class="alert alert-success">' +
       '<strong>Extraction complete</strong> for: <em>' + escHtml(selLabels) + '</em><br>' +
-      meta.recipeNodes + ' recipe nodes &middot; ' +
-      meta.uiNodes + ' visual blocks &middot; ' +
-      meta.connectors + ' connectors &mdash; ' +
-      '<strong>' + pct + '% reduction</strong> from ' + total + ' total nodes.<br>' +
+      '<strong>' + meta.uiNodes + '</strong> nodes &middot; ' +
+      '<strong>' + meta.connectors + '</strong> connectors &mdash; ' +
+      '<strong>' + pct + '%</strong> reduction from ' + totalUiCount + ' total nodes.<br>' +
       '<div class="mt-2">' + pills + '</div>' +
+      (childPills ? '<div class="mt-1 small text-muted">Inside Transform blocks &mdash; ' + childPills + '</div>' : '') +
     '</div>';
 
-  const exportJson = buildExportJson();
+  var exportJson = buildExportJson();
   document.getElementById('resultJSON').textContent = JSON.stringify(exportJson, null, 2);
   document.getElementById('downloadButton').classList.remove('invisible');
   document.getElementById('copyButton').classList.remove('invisible');
 
-  // Scroll to result accordion
-  const collapseResult = document.getElementById('collapseResult');
+  var collapseResult = document.getElementById('collapseResult');
   if (collapseResult) {
-    const bsCollapse = bootstrap.Collapse.getOrCreateInstance(collapseResult);
-    bsCollapse.show();
+    bootstrap.Collapse.getOrCreateInstance(collapseResult).show();
   }
 }
 
@@ -383,14 +465,16 @@ function buildExportJson() {
 }
 
 function download() {
-  const json = buildExportJson();
+  var json = buildExportJson();
   if (!json) return;
-  const suffix = Array.from(selectedOutputs)
-    .map(function(n) { const o = outputNodes.find(function(x) { return x.name === n; }); return o ? (o.datasetName || o.name) : n; })
-    .join('_');
-  const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
+  var suffix = Array.from(selectedOutputs)
+    .map(function(n) {
+      var o = outputNodes.find(function(x) { return x.name === n; });
+      return o ? (o.datasetName || o.name) : n;
+    }).join('_');
+  var blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
   a.href     = url;
   a.download = 'recipe_extracted__' + suffix + '.json';
   a.click();
@@ -398,12 +482,12 @@ function download() {
 }
 
 function copyResult() {
-  const json = buildExportJson();
+  var json = buildExportJson();
   if (!json) return;
   navigator.clipboard.writeText(JSON.stringify(json, null, 2)).then(function() {
-    const btn = document.getElementById('copyButton');
+    var btn = document.getElementById('copyButton');
     if (btn) {
-      const orig = btn.textContent;
+      var orig = btn.textContent;
       btn.textContent = '✔ Copied!';
       setTimeout(function() { btn.textContent = orig; }, 2000);
     }
@@ -413,7 +497,7 @@ function copyResult() {
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function showError(msg) {
   document.getElementById('results').innerHTML =
-    '<div class="alert alert-danger">⚠ ' + escHtml(msg) + '</div>';
+    '<div class="alert alert-danger">&#9888; ' + escHtml(msg) + '</div>';
   document.getElementById('nodePicker').innerHTML = '';
   document.getElementById('statsRow').innerHTML   = '';
 }
