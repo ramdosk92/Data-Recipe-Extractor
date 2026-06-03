@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+    integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+    crossorigin="anonymous">
+  <title>CRM Analytics Recipe Extractor</title>
+  <style>
+    body { background: #f8f9fa; }
+
+    /* ── Header ──────────────────────────────── */
+    .page-header {
+      background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+      color: #fff;
+      padding: 1.75rem 0 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .page-header h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.35rem; }
+    .page-header p  { opacity: .88; margin-bottom: 0; font-size: .94rem; }
+
+    /* ── Node picker cards ───────────────────── */
+    .node-card {
+      cursor: pointer;
+      border: 1.5px solid #dee2e6;
+      transition: border-color .15s, box-shadow .15s;
+      user-select: none;
+    }
+    .node-card:hover   { border-color: #0d6efd; box-shadow: 0 0 0 3px rgba(13,110,253,.12); }
+    .node-card.selected {
+      border-color: #0d6efd;
+      background-color: #eef4ff;
+      box-shadow: 0 0 0 3px rgba(13,110,253,.15);
+    }
+
+    /* ── Accordion tweaks ────────────────────── */
+    .accordion-button:not(.collapsed) { background-color: #e7f1ff; color: #0a58ca; }
+
+    /* ── Code / JSON pre ─────────────────────── */
+    pre.json-view {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: 6px;
+      padding: 1rem;
+      font-size: .78rem;
+      max-height: 420px;
+      overflow: auto;
+      white-space: pre;
+    }
+
+    /* ── Footer ──────────────────────────────── */
+    footer {
+      background: #212529;
+      color: #adb5bd;
+      padding: 1rem 0;
+      margin-top: 3rem;
+    }
+    footer a { color: #6ea8fe; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Badge sizing ────────────────────────── */
+    #statsRow .badge { font-size: .76rem; font-weight: 500; }
+  </style>
+</head>
+
+<body class="d-flex flex-column min-vh-100">
+
+  <!-- ── HEADER ─────────────────────────────────────────────────────────── -->
+  <header class="page-header">
+    <div class="container">
+      <h1>&#9935; CRM Analytics Recipe Extractor</h1>
+      <p>
+        Upload a Salesforce CRM Analytics Data Recipe JSON, select the output
+        dataset(s) you need, and download a trimmed sub-recipe containing only
+        the nodes required to produce them — for faster iteration and shorter run times.
+      </p>
+    </div>
+  </header>
+
+  <!-- ── MAIN ───────────────────────────────────────────────────────────── -->
+  <main class="flex-shrink-0">
+    <div class="container">
+
+      <!-- File input row -->
+      <div class="row align-items-center g-2 mb-3">
+        <div class="col-auto">
+          <label for="fileInput" class="form-label fw-semibold mb-0">Recipe JSON file</label>
+        </div>
+        <div class="col">
+          <input id="fileInput" type="file" name="file" accept=".json" class="form-control">
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-outline-danger" onclick="location.reload()">&#10005; Clear</button>
+        </div>
+      </div>
+
+      <!-- Status message -->
+      <div id="results"></div>
+
+      <!-- Node-type badge row -->
+      <div id="statsRow"></div>
+
+      <!-- Dataset picker + Extract button (populated by JS) -->
+      <div id="nodePicker"></div>
+
+      <!-- ── Accordion ──────────────────────────────────────────────── -->
+      <div class="accordion mt-4" id="mainAccordion">
+
+        <!-- Panel 1: Extracted result -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button
+              class="accordion-button"
+              type="button"
+              data-bs-toggle="collapse"
+              data-bs-target="#collapseResult"
+              aria-expanded="true"
+              aria-controls="collapseResult">
+              Extracted Recipe JSON
+            </button>
+          </h2>
+          <div id="collapseResult" class="accordion-collapse collapse show">
+            <div class="accordion-body">
+              <div class="mb-3">
+                <button id="downloadButton" class="btn btn-success invisible" onclick="download()">
+                  &#11015; Download JSON
+                </button>
+                <button id="copyButton" class="btn btn-outline-secondary invisible ms-2" onclick="copyResult()">
+                  &#128203; Copy to clipboard
+                </button>
+              </div>
+              <pre id="resultJSON" class="json-view"></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 2: Original JSON -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button
+              class="accordion-button collapsed"
+              type="button"
+              data-bs-toggle="collapse"
+              data-bs-target="#collapseOriginal"
+              aria-expanded="false"
+              aria-controls="collapseOriginal">
+              Original JSON Input
+            </button>
+          </h2>
+          <div id="collapseOriginal" class="accordion-collapse collapse">
+            <div class="accordion-body">
+              <pre id="fileContent" class="json-view"></pre>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /accordion -->
+    </div><!-- /container -->
+  </main>
+
+  <!-- ── FOOTER ─────────────────────────────────────────────────────────── -->
+  <footer class="mt-auto">
+    <div class="container d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span class="small">CRM Analytics Recipe Extractor</span>
+      <span class="small opacity-75">All processing is local &mdash; no data leaves your browser</span>
+    </div>
+  </footer>
+
+  <!-- ── SCRIPTS (at end of body so DOM is ready) ───────────────────────── -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-YvpcrYf0tY3lHB60NNkmXc4s9bIOgUxi8T/jzmF7KVjOTB/iI3FkFAMkqFHLiD9p"
+    crossorigin="anonymous"></script>
+  <script src="./extractor.js"></script>
+  <script>init();</script>
+
+</body>
+</html>
